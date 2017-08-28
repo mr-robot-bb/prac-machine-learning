@@ -1,0 +1,138 @@
+---
+title: "Practical Machine Learning Course Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+by: *Henderikus Top*
+
+date: *august 28 - 2017*
+
+## Introduction
+
+Using wearable devices it is possible to collect data about personal activity. In this project we will be using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The six participants were asked to perform biceps curls correctly (class A) and incorrectly (class B, C, D and E). More information about the data can be found [here](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har#ixzz4qJkQqJkl).
+
+The goal of this project is to predict in which class an activity performed by a participant belongs.
+
+## Loading data
+
+```{r warning=FALSE, message=FALSE, results='hide'}
+library(caret)
+# make sure working dir is set correct
+setwd("/home/henderikus/Documents/coursera-data-scientist-spec/practical-machine-learning/course-proj")
+# download files if needed
+if ( !file.exists("./pml-training.csv")){ 
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "./pml-training.csv")
+}
+if ( !file.exists("./pml-testing.csv")){ 
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "./pml-testing.csv")
+}
+# read data from files
+pml.train = read.csv("./pml-training.csv", na.strings=c("NA","#DIV/0!",""))
+pml.test = read.csv("./pml-testing.csv", na.strings=c("NA","#DIV/0!",""))
+```
+
+## Cleaning data
+
+Not all columns are suitable predictors. We will remove: timestamps, id's and user names:
+
+```{r}
+pml.train <- pml.train[, -(1:5)]
+```
+
+Also, a lot of the columns don't have values for most observations. These columns mostly contain summary data of a single 'window'. A 'window' contains a number of obervations (rows) that belong to a single biceps curl. We will remove these window related columns (every window with many NA and the 'new_window' and 'num_window' columns)
+
+```{r}
+pml.train <- pml.train[, -(1:2)] # remove 'new_window' and 'num_window' col
+na.columns <- colnames(pml.train)[colSums(is.na(pml.train)) > 0] 
+pml.train <-pml.train[,!(names(pml.train) %in% na.columns)]
+```
+
+Lastly we will remove columns with almost no variance
+
+```{r}
+low.variance <-nearZeroVar(pml.train, saveMetrics=TRUE)
+pml.train <- pml.train[,low.variance$nzv==FALSE]
+```
+
+Of the 160 columns we started with, only 53 are left.
+
+## Splitting data
+
+We will keep some data out of our training set for validation of our final model.
+
+```{r}
+split=0.80
+train.index <- createDataPartition(pml.train$classe, p=split, list=FALSE)
+data.train <- pml.train[ train.index,]
+data.validation <- pml.train[-train.index,]
+```
+
+We will use 3-fold cross validation for splitting the training data.
+
+```{r}
+# 3-fold cross validation
+set.seed(12345)
+tc <- trainControl(method = "cv", number = 3,  allowParallel = TRUE, verboseIter=FALSE)
+```
+
+## Building prediction model
+
+For our prediction model we use Random Forests. To keep waiting time down we setup parallel processing for this task.
+
+```{r warning=FALSE, message=FALSE}
+# setup for parallel processing
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+# train model (this takes 5 minutes on an intel 6100u with 8GB ram)
+model.rf <- train(classe ~ ., data = data.train, method = "rf", trControl= tc)
+
+# De-register parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+
+# show model
+model.rf
+```
+
+
+### Accuracy of model
+
+Accuracy:
+```{r}
+max(model.rf$results$Accuracy)
+```
+
+Kappa:
+```{r}
+max(model.rf$results$Kappa)
+```
+
+Expected out of sample error:
+```{r}
+1 - max(model.rf$results$Accuracy)
+```
+
+Because of it's high accuracy we would expect the model will perform well on the validation data we holded out.
+
+### Accuracy on validation data
+
+```{r}
+prediction <- predict(model.rf, data.validation)
+cm.rf <- confusionMatrix(prediction, data.validation$classe) # confusion matrix
+cm.rf
+```
+
+Accuracy on validation data is above 99%. I feel confident the model will perform fine on the test data.
+
+## Using model on test data
+
+```{r}
+test.pml.prediction <- predict(model.rf, pml.test)
+test.pml.prediction
+```
